@@ -1,0 +1,87 @@
+---
+title: "Aggregating Sensor Data"
+author: "Hayley Garment"
+date: "6/18/2020"
+output: html_document
+---
+
+In this file:
+1. Aggregate all stations into a single file
+
+Output:
+1. data/all_stations_pm25.rds - datetime, pm 2.5 in ug/m3, station code of reading
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(tmap)
+library(broom)
+library(rgdal)
+```
+
+**1. Aggregate all stations into a single file**
+
+*Read station code data*
+```{r}
+stations_serialnum <- readRDS('data/stations_serial_num.rds') %>% filter(serial_number != 'MHPP97G' & serial_number != '7zxpmnr6' & serial_number != 'WHSSK9M') # MHPP97G has a different file name dealt with separetely. 'CMYLXSH' from the original files doesn't match anything in the decoder. And none of the original files are labelled '7zxpmnr6' or 'WHSSK9M'.
+
+stations_serialnum %>% arrange(desc(serial_number))
+```
+
+*For each code, fetch the file and add the labelled data to a list*
+```{r}
+stations_pm25_list = list()
+
+for(i in 1:nrow(stations_serialnum)) {
+  station_serial <- stations_serialnum$serial_number[i] # get serial number
+  
+  # read file and generate weekly data
+  filename <- paste(
+    'raw_data/air_visual_data/historical_hourly_data_',
+    station_serial,
+    '.csv',
+    sep='')
+  
+  station_data <- read.csv(filename)
+  station_data <- station_data %>% select(Datetime, PM2.5..ug.m3.) %>% rename(pm25_ug = PM2.5..ug.m3., datetime = Datetime)
+  
+  station_data <- station_data %>% mutate(station_serial = station_serial) # label with serial num
+  
+  stations_pm25_list[[i]] <- station_data
+}
+```
+
+*Add in the data from the file with un-cleaned datetimes*
+```{r}
+station_serial <- 'MHPP97G'
+  
+  # read file and generate weekly data
+  filename <- paste(
+    'raw_data/air_visual_data/historical_raw_data_',
+    station_serial,
+    '.csv',
+    sep='')
+  
+  station_data <- read.csv(filename)
+  station_data <- station_data %>% select(Datetime, PM2.5..ug.m3.) %>% rename(pm25_ug = PM2.5..ug.m3., datetime = Datetime)
+  
+  station_data <- station_data %>% mutate(station_serial = station_serial) # label with serial num
+  
+  last_rownumber <- nrow(stations_serialnum) + 1
+  stations_pm25_list[[last_rownumber]] <- station_data
+
+```
+
+*Merge all the station data together and save*
+```{r}
+all_stations_pm25 <- do.call(rbind, stations_pm25_list)
+saveRDS(all_stations_pm25, 'data/all_stations_pm25.rds')
+```
+
+

@@ -1,0 +1,94 @@
+---
+title: "Cleaning Sensor Locations"
+author: "Hayley Garment"
+date: "6/17/2020"
+output: html_document
+---
+
+In this file:
+1. Matching AirVisual Serial Codes with Station Names by LonLat
+2. Matching AirVisual Serial Codes with Station Names by Proximity
+
+Output: 
+1. data/stations_serial_num.rds - station code, lat, lon
+
+Ultimately, these two sets are not the same. So just use the Public Lab stations without names.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(tmap)
+library(broom)
+library(rgdal)
+```
+
+
+**READING DATA**
+```{r}
+station_names_lonlat <- read.csv('raw_data/stations_name_lonlat.csv')
+stations_serialnum_lonlat <- read.csv('raw_data/air_visual_data/stations_serial_code_lonlat.csv')
+```
+
+*A. Get standard lon and lat from serial coded stations*
+```{r}
+stations_serialnum_lonlat <- stations_serialnum_lonlat %>% mutate(coor = as.character(Coordinate))
+
+# fix up typo
+stations_serialnum_lonlat <- stations_serialnum_lonlat %>%
+  mutate(coor = ifelse(Serial.Number == 'LUAKYUG', '47.912120, 106.953814', coor))
+
+# put lon lat into separate columns
+stations_serialnum_lonlat <- stations_serialnum_lonlat %>%
+  separate(coor, into=c('lat', 'lon'), sep=', ', remove=TRUE) %>%
+  select(-Share.Code) %>%
+  rename(serial_number = Serial.Number)
+
+stations_serialnum_lonlat$lat <- as.double(stations_serialnum_lonlat$lat)
+stations_serialnum_lonlat$lon <- as.double(stations_serialnum_lonlat$lon)
+
+saveRDS(stations_serialnum_lonlat, 'data/stations_serial_num.rds')
+```
+
+**1. Matching AirVisual Serial Codes with Station Names by LonLat**
+*Joining based on lon lat only gets a perfect match for 16 of 23 stations.*
+```{r}
+station_names_lonlat
+stations_serialnum_lonlat
+
+inner_join(x=stations_serialnum_lonlat, y=station_names_lonlat, by=c('lon', 'lat') )
+```
+
+
+**2. Matching AirVisual Serial Codes with Station Names by Proximity**
+*Try to map the stations and see which are comparable*
+```{r}
+sf_airvisual <- st_as_sf(station_names_lonlat, 
+                         coords = c("lon", "lat"), 
+                         crs = 4326) %>%
+                st_transform(3414)
+
+sf_publiclab <- st_as_sf(stations_serialnum_lonlat, 
+                         coords = c("lon", "lat"), 
+                         crs = 4326) %>%
+                st_transform(3414)
+```
+
+*It turns out that the stations only overlap for 16 stations, Air Visual is reporting more stations, possibly govt stations.*
+*Public lab has some sensors that are NOT on the air visual API?*
+*Use Public Lab's for kriging, and for the LUR can use govt data as possible test*
+```{r}
+tmap_mode("view")
+  
+# Plot
+tm_shape(sf_airvisual) + 
+  tm_dots(col='blue') +
+  tm_shape(sf_publiclab) +
+  tm_dots(col='red')
+
+```

@@ -1,0 +1,92 @@
+---
+title: "Calculating Weekly and Monthly Averages"
+author: "Hayley Garment"
+date: "6/18/2020"
+output: html_document
+---
+
+In this file:
+1. Checking the time range for each sensor
+2. Calculating Monthly Means of pm2.5 per station
+
+Output:
+
+1. data/start_end_date_by_sensor.rds - for each sensor earliest and latest sensor reading
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(tmap)
+library(broom)
+library(rgdal)
+```
+
+*Fetch data*
+```{r}
+sensor_data <- readRDS('data/all_stations_pm25.rds')
+```
+
+*Change the date to be POSIXct*
+```{r}
+ub_timezone <- "Asia/Ulan_Bator"
+
+sensor_data <- sensor_data %>% mutate(datetime = ymd_hms(datetime, tz = ub_timezone))
+```
+
+**1. Checking the time range for each sensor**
+
+*Check the beginnings and endings of each sensor*
+```{r}
+start_end_date_by_sensor <- sensor_data %>% group_by(station_serial) %>% 
+  summarize(earliest_date = min(datetime), latest_date = max(datetime)) %>% 
+  ungroup() %>% 
+  arrange(earliest_date)
+
+saveRDS(start_end_date_by_sensor, 'data/start_end_date_by_sensor.rds')
+```
+
+*Look at readings over time*
+```{r}
+  # manually change and examine
+  i <- 21
+  code <- start_end_date_by_sensor$station_serial[[i]]
+  
+  sensor_data %>% filter(station_serial == code) %>%
+    mutate(date = date(datetime)) %>% 
+    ggplot(aes(x=date)) +
+    geom_histogram()
+  
+  # has to have over 672 hrs per month to considered for 'hourly avg for a month'
+  # has to have 168 hrs to be week to be considered 'hourly average for a whole week'
+  # 'monthly = over 650 readings, 'weekly' = over 160 readings
+
+  # want over 95% of the values there to have the 'avg
+```
+
+
+**2. Calculating Monthly Means of pm2.5 per station**
+*Group by Month*
+```{r}
+test_data <- sensor_data %>% filter(station_serial == 'HMA6KRK')
+
+test_date <- test_data$datetime[[1]]
+
+year(test_date)
+month(test_date)
+
+test_data <- test_data %>% mutate(year = year(datetime), month = month(datetime))
+
+test_data_by_month <- test_data %>% group_by(station_serial, year, month) %>% 
+  summarize(monthly_avg_pm25 = mean(pm25_ug)) %>% 
+  ungroup()
+
+```
+
