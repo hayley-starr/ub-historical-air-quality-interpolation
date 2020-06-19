@@ -1,0 +1,71 @@
+---
+title: "Creating Spatial Files for Averages"
+author: "Hayley Garment"
+date: "6/19/2020"
+output: html_document
+---
+In this file
+
+1. Creating Shp file for each monthly average
+
+Output:
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(tmap)
+library(broom)
+library(rgdal)
+```
+
+**1. Creating Shp file for each monthly average**
+
+*Fetch data*
+```{r}
+monthly_means <- readRDS('data/sensor_means_by_month_over_650_readings.rds')
+station_serials <- readRDS('data/stations_serial_num.rds')
+```
+
+*Join monthly means with lonlat data*
+```{r}
+station_serials <- station_serials %>% rename(station_serial = serial_number)
+
+monthly_means_lonlat <- left_join(monthly_means, station_serials, by="station_serial") %>% select(-Coordinate, -num_readings, -year, -month)
+```
+
+*Create and plot spatially*
+```{r}
+sf_monthly_means <- st_as_sf(monthly_means_lonlat, coords = c("lon", "lat"), crs = 4326) %>%
+  st_transform(3414)
+
+sf_monthly_means <- st_transform(sf_monthly_means, sf::st_crs("+proj=longlat +datum=WGS84"))
+
+sf_monthly_means %>% filter(datetime == '2019-10-01') %>% 
+  tm_shape() + tm_dots(col='monthly_avg_pm25')
+```
+
+*save as shp files*
+```{r}
+useable_months <- monthly_means %>% distinct(datetime)
+
+#for each month save?
+for(i in 1:nrow(useable_months)) {
+  i = 1
+  month_to_use <- useable_months$datetime[[i]]
+  means_for_month_to_use <- sf_monthly_means %>% filter(datetime == month_to_use)
+  filename = paste("data/geo_monthly_avgs/month_of_", month_to_use, sep = '')
+  #fix
+  writeOGR(SpatialPointsDataFrame(means_for_month_to_use), dsn = filename, layer = "sensor_monthly_avg",
+         driver = "ESRI Shapefile" )
+}
+```
+
