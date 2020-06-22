@@ -42,30 +42,44 @@ station_serials <- station_serials %>% rename(station_serial = serial_number)
 monthly_means_lonlat <- left_join(monthly_means, station_serials, by="station_serial") %>% select(-Coordinate, -num_readings, -year, -month)
 ```
 
-*Create and plot spatially*
+*Plot spatially to view*
 ```{r}
 sf_monthly_means <- st_as_sf(monthly_means_lonlat, coords = c("lon", "lat"), crs = 4326) %>%
   st_transform(3414)
 
 sf_monthly_means <- st_transform(sf_monthly_means, sf::st_crs("+proj=longlat +datum=WGS84"))
 
-sf_monthly_means %>% filter(datetime == '2019-10-01') %>% 
+sf_monthly_means %>% filter(datetime == '2019-11-01') %>% 
   tm_shape() + tm_dots(col='monthly_avg_pm25')
 ```
 
 *save as shp files*
 ```{r}
-useable_months <- monthly_means %>% distinct(datetime)
+useable_months <- monthly_means %>% distinct(datetime) %>% arrange(datetime)
 
 #for each month save?
 for(i in 1:nrow(useable_months)) {
-  i = 1
   month_to_use <- useable_months$datetime[[i]]
-  means_for_month_to_use <- sf_monthly_means %>% filter(datetime == month_to_use)
+  
+  means_for_month_to_use <- monthly_means_lonlat %>% filter(datetime == month_to_use)
+  
   filename = paste("data/geo_monthly_avgs/month_of_", month_to_use, sep = '')
-  #fix
-  writeOGR(SpatialPointsDataFrame(means_for_month_to_use), dsn = filename, layer = "sensor_monthly_avg",
+  
+  # convert to spatial points data frame
+  xy <- means_for_month_to_use[,c(5,4)] # lon then lat
+  means_for_month_to_use_spatial <- SpatialPointsDataFrame(coords = xy, means_for_month_to_use)
+  
+  # write to shp file
+  writeOGR(means_for_month_to_use_spatial, dsn = filename, layer = "sensor_monthly_avg",
          driver = "ESRI Shapefile" )
 }
+
 ```
+
+```{r}
+feb_2019_readings <- st_read("data/geo_monthly_avgs/month_of_2020-03-01/sensor_monthly_avg.shp")
+
+st_as_sf(feb_2019_readings, crs= 3414) %>% tm_shape() + tm_dots(col='mnt__25')
+```
+
 
