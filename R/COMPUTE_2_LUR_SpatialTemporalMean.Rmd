@@ -10,7 +10,11 @@ In this file
 
 Output:
 
-
+1. data/geo_monthly_avgs/month_of_<2020-02-01> 
+  # eg. shp files for avg per point in the month of feb 2020
+  
+2. data/monthly_avgs/month_of_<2020-02-01> 
+  # eg. rds files of avg per point in month of feb 2020
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -39,7 +43,7 @@ station_serials <- readRDS('data/stations_serial_num.rds')
 ```{r}
 station_serials <- station_serials %>% rename(station_serial = serial_number)
 
-monthly_means_lonlat <- left_join(monthly_means, station_serials, by="station_serial") %>% select(-Coordinate, -num_readings, -year, -month)
+monthly_means_lonlat <- left_join(monthly_means, station_serials, by="station_serial") %>% dplyr::select(-Coordinate, -num_readings, -year, -month)
 ```
 
 *Plot spatially to view*
@@ -64,14 +68,18 @@ for(i in 1:nrow(useable_months)) {
   means_for_month_to_use <- monthly_means_lonlat %>% filter(datetime == month_to_use)
   
   filename = paste("data/geo_monthly_avgs/month_of_", month_to_use, sep = '')
+  filename_rds = paste("data/monthly_avgs/month_of_", month_to_use, ".rds", sep = '')
   
   # convert to spatial points data frame
   xy <- means_for_month_to_use[,c(5,4)] # lon then lat
   means_for_month_to_use_spatial <- SpatialPointsDataFrame(coords = xy, means_for_month_to_use)
   
   # write to shp file
-  writeOGR(means_for_month_to_use_spatial, dsn = filename, layer = "sensor_monthly_avg",
-         driver = "ESRI Shapefile" )
+  #writeOGR(means_for_month_to_use_spatial, dsn = filename, layer = "sensor_monthly_avg",
+       #  driver = "ESRI Shapefile" )
+
+  #write to rds file
+  saveRDS(means_for_month_to_use, filename_rds)
 }
 
 ```

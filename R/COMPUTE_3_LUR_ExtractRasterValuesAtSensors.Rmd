@@ -1,0 +1,99 @@
+---
+title: "Extracting Raster Values at Sensor Points"
+author: "Hayley Garment"
+date: "6/24/2020"
+output: html_document
+---
+
+In this file:
+
+1. Create raster stack
+2. Extract values in rasters to sensos/station points
+
+Output:
+
+1. data/lur_predictor_vals_per_station.rds - for each station, value of each predictor
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(broom)
+library(rgdal)
+library(sp)
+library(raster)
+```
+
+*Load sensor points*
+```{r}
+station_locations <- readRDS('data/stations_serial_num.rds')
+```
+
+
+*Load raster data*
+```{r}
+stove_005 <- raster('data/lur_rasters/stove_concentration_point005.tif') #these are not right
+stove_01 <- raster('data/lur_rasters/stove_concentration_point01.tif')
+
+#this has the correct extent..
+topo <- raster('raw_data/ub_topography.tif')
+
+#plot(stove_005)
+
+```
+
+*Create spatial points from station lon lats*
+```{r}
+station_lonlat <- station_locations[,c(4,3)]
+station_points <- SpatialPoints(coords = station_lonlat)
+#class(points)
+```
+
+**1. Create raster stack**
+
+*Make data 'stackable'*
+```{r}
+#check extents, they're slightly different, though I tried to use the same one in argGIS
+extent(stove_005)
+extent(stove_01)
+extent(topo)
+```
+
+```{r}
+# crop the extents
+generic_extent <- extent(stove_01)
+
+extent(stove_005) <- generic_extent
+extent(topo) <- generic_extent
+```
+
+```{r}
+# resample to the resolution of the finest layer, topography 
+stove_01_resampled <- resample(stove_01, topo, method='bilinear')
+stove_005_resampled <- resample(stove_005, topo, method='bilinear')
+
+plot(stove_005)
+plot(stove_005_resampled)
+# hmm
+```
+
+*Put the raster stack together*
+```{r}
+rasterStack <- stack(stove_005_resampled, stove_01_resampled, topo)
+```
+
+
+
+**2. Extract values in rasters to sensos/station points**
+```{r}
+data_per_point <- extract(rasterStack, station_points)
+
+station_lur_data <- cbind(station_locations, as.data.frame(data_per_point))
+
+#saveRDS(station_lur_data, 'data/lur_predictor_vals_per_station.rds')
+```

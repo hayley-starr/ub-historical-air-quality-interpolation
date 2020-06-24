@@ -53,13 +53,13 @@ start_end_date_by_sensor <- sensor_data %>% group_by(station_serial) %>%
   ungroup() %>% 
   arrange(earliest_date)
 
-saveRDS(start_end_date_by_sensor, 'data/start_end_date_by_sensor.rds')
+#saveRDS(start_end_date_by_sensor, 'data/start_end_date_by_sensor.rds')
 ```
 
 *Look at readings over time*
 ```{r}
   # manually change and examine
-  i <- 15
+  i <- 12
   code <- start_end_date_by_sensor$station_serial[[i]]
   
   sensor_data %>% filter(station_serial == code) %>%

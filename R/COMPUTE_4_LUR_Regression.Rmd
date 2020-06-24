@@ -1,0 +1,77 @@
+---
+title: "PM2.5 Land Use Regression"
+author: "Hayley Garment"
+date: "6/24/2020"
+output: html_document
+---
+
+In this file:
+1. Join predictor and indpendent variables at each station
+2. Regression
+
+Output:
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(broom)
+library(rgdal)
+library(sp)
+library(raster)
+```
+
+*Load predictor variables at each station*
+```{r}
+predictor_vals <- readRDS('data/lur_predictor_vals_per_station.rds') %>% rename(station_serial = serial_number)
+```
+
+
+*Load independent variable at each station -pm2.5 avg
+**Sample**
+```{r}
+jan_2020_avg <- readRDS('data/monthly_avgs/month_of_2020-01-01.rds')
+```
+
+
+**1. Join predictor and indpendent variables at each station**
+```{r}
+jan_2020_data <- left_join(jan_2020_avg, predictor_vals)
+
+jan_2020_data <- jan_2020_data %>% dplyr::select(monthly_avg_pm25, stove_concentration_point005,stove_concentration_point01, ub_topography)
+```
+
+```{r}
+ggplot(jan_2020_data, aes(x=stove_concentration_point01, y=monthly_avg_pm25)) + geom_point()
+ggplot(jan_2020_data, aes(x=stove_concentration_point005, y=monthly_avg_pm25)) + geom_point()
+ggplot(jan_2020_data, aes(x=ub_topography, y=monthly_avg_pm25)) + geom_point()
+
+```
+
+
+**2. Regression**
+
+```{r}
+ols <- lm(monthly_avg_pm25 ~ stove_concentration_point005 + stove_concentration_point01 + ub_topography, jan_2020_data)
+```
+
+```{r}
+tidy(ols)
+# add to data
+jan_2020_data_with_predictions <- augment(ols, data = jan_2020_data)
+
+# plot residuals
+jan_2020_data_with_predictions %>% 
+  ggplot(aes(x = .resid)) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept=0) +
+  ggtitle('Jan 2020')
+
+```
+
