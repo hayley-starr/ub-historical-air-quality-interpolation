@@ -39,6 +39,13 @@ predictor_vals <- readRDS('data/lur_predictor_vals_per_station.rds') %>% rename(
 jan_2020_avg <- readRDS('data/monthly_avgs/month_of_2020-01-01.rds')
 ```
 
+*look on map*
+```{r}
+tmap_mode("view")
+jan_2020_geo <- st_as_sf(jan_2020_avg, coords = c("lon", "lat"), crs = 4326) 
+tm_shape(jan_2020_geo) + tm_dots(col='monthly_avg_pm25')
+```
+
 
 **1. Join predictor and indpendent variables at each station**
 ```{r}
@@ -59,6 +66,8 @@ ggplot(jan_2020_data, aes(x=ub_topography, y=monthly_avg_pm25)) + geom_point()
 
 ```{r}
 ols <- lm(monthly_avg_pm25 ~ stove_concentration_point005 + stove_concentration_point01 + ub_topography, jan_2020_data)
+
+lm(monthly_avg_pm25 ~ stove_concentration_point01, jan_2020_data) %>% summary()
 ```
 
 ```{r}
@@ -72,6 +81,8 @@ jan_2020_data_with_predictions %>%
   geom_histogram(bins = 50) +
   geom_vline(xintercept=0) +
   ggtitle('Jan 2020')
+
+summary(ols)
 
 ```
 

@@ -1,0 +1,168 @@
+---
+title: "Computing Summer LURS"
+author: "Hayley Garment"
+date: "7/7/2020"
+output: html_document
+---
+
+In this file:
+1. Join predictor and indpendent variables at each station
+2. Regression
+
+Output:
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(broom)
+library(rgdal)
+library(sp)
+library(raster)
+```
+
+*Load predictor variables at each station*
+```{r}
+predictor_vals <- read.csv('data/sensor_locations_predictor_values_additional_vars.csv') %>% 
+  rename(station_serial = serial_num) %>% dplyr::select(-FID, -lat, -lon)
+```
+
+
+*Load independent variable at each station -pm2.5 avg
+**Sample**
+```{r}
+monthly_avg <- readRDS('data/monthly_avgs/month_of_2019-06-01.rds') %>% dplyr::select(-datetime) %>% filter(station_serial != 'SLSVLW4')
+```
+
+*look on map*
+```{r}
+tmap_mode("view")
+monthly_geo <- st_as_sf(monthly_avg, coords = c("lon", "lat"), crs = 4326) 
+tm_shape(monthly_geo) + tm_dots(col='monthly_avg_pm25')
+```
+
+
+**1. Join predictor and indpendent variables at each station**
+```{r}
+month_data <- left_join(monthly_avg, predictor_vals)
+
+#month_data
+```
+
+**Looking at plots for avg pm25 vs predictors**
+```{r}
+if (false) {
+ggplot(month_data, aes(x=dist_to_trunk_rd, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=ub_pop_2019_1km, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=ub_topogra, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=stove_kernel_density_radius_007, y=monthly_avg_pm25)) + geom_point()
+
+
+ggplot(month_data, aes(x=stove_conc_005, y=monthly_avg_pm25)) + 
+  geom_point(col=month_data$district)
+}
+```
+
+
+**2. Regression**
+
+
+```{r}
+predictors <- month_data %>% dplyr::select(-lon, -lat, -station_serial, -monthly_avg_pm25 , -district) %>% colnames()
+```
+
+
+```{r}
+predictor_rsquared <- list()
+
+for(i in 1:length(predictors)) {
+  predictor <- predictors[i]
+  model <- lm(monthly_avg_pm25 ~ get(predictor), month_data)
+  r_squared <- summary(model)$adj.r.squared
+  
+  predictor_rsquared[[i]] <- r_squared
+}
+
+cbind(predictors, predictor_rsquared)
+
+```
+
+
+*Adding potential interaction term for pop change*
+```{r}
+month_data <- month_data %>% mutate(high_growth = if_else(pop_change > 1, TRUE, FALSE))
+```
+
+```{r}
+predictor_rsquared <- list()
+
+for(i in 1:length(predictors)) {
+  predictor <- predictors[i]
+  model <- lm(monthly_avg_pm25 ~ get(predictor):high_growth, month_data)
+  r_squared <- summary(model)$adj.r.squared
+  
+  predictor_rsquared[[i]] <- r_squared
+}
+
+cbind(predictors, predictor_rsquared)
+
+```
+
+*trying to add the district as a categorical variable*
+```{r}
+month_data
+
+ub_districts <-read_csv('data/ub_districts.csv') %>% 
+  rename(district = OBJECTID) %>% 
+  dplyr::select(district, Name)
+
+month_data <- left_join(month_data, ub_districts) %>% rename(district_name = Name)
+```
+
+
+COMBINED MODEL FOR MONTHLY AVG
+*Testing out variables together*
+*Ok with stove_conc005:high growth + PathDis_ci + population!*
+*0.41 for September*
+*0.28 for july, with path + highgrowth:stove density_007*
+*june: stove_conc_005 + high_growth:ub_pop_2019_1km: 0.25*
+```{r}
+ols <- lm(monthly_avg_pm25 ~ stove_conc_005 + high_growth:ub_pop_2019_1km, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+
+
+
+
+```{r}
+month_data_with_predictions <- augment(ols, data = month_data)
+
+month_data_with_predictions <- month_data_with_predictions %>% mutate(predicted = exp(.fitted))
+
+# plot residuals
+month_data_with_predictions %>% 
+  ggplot(aes(x = .resid)) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept=0) +
+  ggtitle('Jan 2020')
+
+summary(ols)
+```
+
+
+```{r}
+month_data_with_predictions_geo <- st_as_sf(month_data_with_predictions, coords = c("lon", "lat"), crs = 4326) 
+tm_shape(month_data_with_predictions_geo) + tm_dots(col='monthly_avg_pm25')
+tm_shape(month_data_with_predictions_geo) + tm_dots(col='.fitted')
+tm_shape(month_data_with_predictions_geo) + tm_dots(col='.resid')
+```
+

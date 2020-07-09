@@ -1,0 +1,201 @@
+---
+title: "Computing Winter LURS"
+author: "Hayley Garment"
+date: "7/7/2020"
+output: html_document
+---
+
+In this file:
+1. Join predictor and indpendent variables at each station
+2. Regression
+
+Output:
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(broom)
+library(rgdal)
+library(sp)
+library(raster)
+```
+
+*Load predictor variables at each station*
+```{r}
+predictor_vals <- read.csv('data/sensor_locations_predictor_values_additional_vars.csv') %>% 
+  rename(station_serial = serial_num) %>% dplyr::select(-FID, -lat, -lon)
+```
+
+
+*Load independent variable at each station -pm2.5 avg
+**Sample**
+```{r}
+monthly_avg <- readRDS('data/monthly_avgs/month_of_2019-11-01.rds') %>% dplyr::select(-datetime) %>% filter(station_serial != 'SLSVLW4')
+```
+
+*Optional Test - use natural log of pm2.5 avgs*
+```{r}
+monthly_avg <- monthly_avg %>% mutate(lnPM25 = log(monthly_avg_pm25))
+```
+
+*look on map*
+```{r}
+tmap_mode("view")
+monthly_geo <- st_as_sf(monthly_avg, coords = c("lon", "lat"), crs = 4326) 
+tm_shape(monthly_geo) + tm_dots(col='monthly_avg_pm25')
+```
+
+
+**1. Join predictor and indpendent variables at each station**
+```{r}
+month_data <- left_join(monthly_avg, predictor_vals)
+
+month_data
+```
+
+**Looking at plots for avg pm25 vs predictors**
+```{r}
+ggplot(month_data, aes(x=major_road_01, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=major_road_005, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=res_road_01, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=res_road_005, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=ub_pop_2019_1km, y=monthly_avg_pm25)) + geom_point()
+```
+
+
+```{r}
+ggplot(month_data, aes(x=stove_conc_01, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=stove_conc_005, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=stove_kernel_density_radius_01, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=stove_kernel_density_radius_007, y=monthly_avg_pm25)) + geom_point()
+ggplot(month_data, aes(x=PathDis_ci, y=monthly_avg_pm25)) + geom_point()
+```
+
+
+**Plots but with natural log of pm2.5**
+```{r}
+ggplot(month_data, aes(x=major_road_01, y=lnPM25)) + geom_point()
+ggplot(month_data, aes(x=major_road_005, y=lnPM25)) + geom_point()
+ggplot(month_data, aes(x=res_road_01, y=lnPM25)) + geom_point()
+ggplot(month_data, aes(x=res_road_005, y=lnPM25)) + geom_point()
+ggplot(month_data, aes(x=ub_pop_2019_1km, y=lnPM25)) + geom_point()
+```
+
+```{r}
+ggplot(month_data, aes(x=stove_conc_01, y=lnPM25)) + geom_point()
+ggplot(month_data, aes(x=stove_conc_005, y=lnPM25)) + geom_point()
+ggplot(month_data, aes(x=stove_kernel_density_radius_01, y=lnPM25)) + geom_point()
+ggplot(month_data, aes(x=stove_kernel_density_radius_007, y=lnPM25)) + geom_point()
+ggplot(month_data, aes(x=PathDis_ci, y=lnPM25)) + geom_point()
+```
+
+**2. Regression**
+
+*major road density - neither particuarly promising*
+```{r}
+ols <- lm(monthly_avg_pm25 ~ major_road_01 + major_road_005, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+*residential road density - 005 is promising*
+0.6711 with ln
+0.63 without ln
+```{r}
+ols <- lm(monthly_avg_pm25 ~ res_road_01 + res_road_005, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+
+
+*stove concentration - 005 promising *
+0.5739 without ln
+0.563 with ln
+```{r}
+ols <- lm(monthly_avg_pm25 ~ stove_conc_01 + stove_conc_005, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+*path distance to city - ok not terrible! *
+```{r}
+ols <- lm(monthly_avg_pm25 ~ PathDis_ci, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+
+*population - yes! predictive *
+```{r}
+ols <- lm(monthly_avg_pm25 ~ ub_pop_2019_1km, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+
+*stove density -  meh?*
+```{r}
+ols <- lm(monthly_avg_pm25 ~ stove_kernel_density_radius_007 + stove_kernel_density_radius_01, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+
+*Testing out variables together 0.74 is the best so far -res005, stove oo5 and ubpop*
+*Goes down if including that one weird sensor*
+```{r}
+ols <- lm(monthly_avg_pm25 ~  res_road_005 + stove_conc_005 + ub_pop_2019_1km, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+*Testing out variables with LN*
+together 0.75 is the best so far -res005, stove oo5 and ubpop
+0.76 with res_road_01, stove conc_005, ubpop
+```{r}
+ols <- lm(lnPM25 ~  res_road_01 + stove_conc_005 + ub_pop_2019_1km, month_data)
+
+ols %>% summary()
+
+tidy(ols)
+```
+
+
+```{r}
+month_data_with_predictions <- augment(ols, data = month_data)
+
+month_data_with_predictions <- month_data_with_predictions %>% mutate(predicted = exp(.fitted))
+
+# plot residuals
+month_data_with_predictions %>% 
+  ggplot(aes(x = .resid)) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept=0) +
+  ggtitle('Jan 2020')
+
+summary(ols)
+```
+
+
+```{r}
+month_data_with_predictions_geo <- st_as_sf(month_data_with_predictions, coords = c("lon", "lat"), crs = 4326) 
+tm_shape(month_data_with_predictions_geo) + tm_dots(col='monthly_avg_pm25')
+tm_shape(month_data_with_predictions_geo) + tm_dots(col='predicted')
+tm_shape(month_data_with_predictions_geo) + tm_dots(col='.resid')
+```
+

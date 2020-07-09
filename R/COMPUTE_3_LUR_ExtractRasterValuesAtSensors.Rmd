@@ -81,6 +81,19 @@ plot(stove_005)
 plot(stove_005_resampled)
 # hmm
 ```
+*testing*
+```{r}
+jan_2020_avg <- readRDS('data/monthly_avgs/month_of_2020-01-01.rds')
+```
+
+*look on map*
+```{r}
+tmap_mode("view")
+jan_2020_geo <- st_as_sf(jan_2020_avg, coords = c("lon", "lat"), crs = 4326) 
+tm_shape(stove_01_resampled) + tm_raster() + tm_shape(jan_2020_geo) + tm_dots(col='monthly_avg_pm25')
+
+```
+
 
 *Put the raster stack together*
 ```{r}
