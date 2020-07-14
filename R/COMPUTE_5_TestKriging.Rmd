@@ -1,0 +1,158 @@
+---
+title: "Testing out Kriging Methods"
+author: "Hayley Garment"
+date: "7/9/2020"
+output: html_document
+---
+
+In this file:
+
+1. Test out Kriging with July 2019 LUR
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(broom)
+library(rgdal)
+library(sp)
+library(raster)
+library(geostatsp)
+library(gstat)
+library(stars)
+```
+
+*upload LUR for July 2019*
+```{r}
+july2019LUR <- raster('LURs/july2019LUR_Resample1.tif')
+
+#plot(july2019LUR)
+```
+
+*upload daily data for July 2019*
+```{r}
+sensor_data <- readRDS('data/sensor_data_tidy.rds') %>% filter(station_serial != 'SLSVLW4')
+```
+*get the average for each day at each sensor*
+```{r}
+sensor_data_means <- sensor_data %>% 
+  filter(year(datetime) == 2019 & month(datetime) == 7) %>% 
+  mutate(week = as.integer(date(datetime))%% 7) %>% 
+  group_by(week, station_serial) %>% 
+  summarise(avg_pm25 = mean(pm25_ug)) %>% 
+  ungroup()
+```
+
+*convert each station reading to spatial*
+```{r}
+station_serials <- readRDS('data/stations_serial_num.rds')
+
+station_serials <- station_serials %>% rename(station_serial = serial_number)
+
+weekly_mean_lonlat <- left_join(sensor_data_means, station_serials, by="station_serial") %>% dplyr::select(-Coordinate)
+
+sf_weekly_means <- st_as_sf(weekly_mean_lonlat, coords = c("lon", "lat"), crs = 4326) %>%
+  st_transform(3414)
+```
+
+```{r}
+july1st <- weekly_mean_lonlat %>% filter(week == 2)
+tmap_mode("view")
+july1st_geo <- st_as_sf(july1st, coords = c("lon", "lat"), crs = 4326) 
+july1st_geo %>% tm_shape() + tm_dots(col='avg_pm25')
+```
+
+
+
+Get predictors on this day
+```{r}
+predictor_vals <- read.csv('data/sensor_locations_predictor_values_additional_vars.csv') %>% 
+  rename(station_serial = serial_num) %>% dplyr::select(-FID, -lat, -lon)
+
+
+july_with_predictors <- left_join(july1st, predictor_vals)
+july_with_predictors <- july_with_predictors %>% mutate(high_growth = if_else(pop_change > 1, TRUE, FALSE))
+
+july_with_predictions <- augment(ols, newdata=july_with_predictors) %>% mutate(resid = avg_pm25 - .fitted)
+```
+
+KRIGE!
+1. Define a grid: my UB extent
+```{r}
+extent <- extent(july2019LUR)
+
+# Initialize a raster layer
+ras <- raster(extent)
+
+# Set the resolution to be
+res(ras) <- res(july2019LUR)
+ras[] <- 0
+
+# Project the raster
+projection(ras) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+basic_grid <- ras
+
+basic_grid <- aggregate(basic_grid, fact=10)
+
+```
+
+
+*create variogram model*
+```{r}
+if(FALSE) {
+variogram <- variogram(resid~1, locations=~lon+lat, data=july_with_predictions, cutoff=0.1)
+
+variogram
+
+plot(variogram)
+}
+
+if (FALSE) {
+linear_model <- fit.variogram(variogram, vgm("Lin"))
+plot(variogram, model=linear_model) 
+attr(model, "SSErr")
+}
+
+if(FALSE) {
+x <- gstat::krige(formula=resid~1, locations=krige_data, newdata=grid, model=linear_model)
+plot(x)
+}
+```
+
+
+**Try with simple iwd**
+
+```{r}
+july_granular <- aggregate(july2019LUR, fact=10)
+#plot(july_granular)
+
+krige_data <- july_with_predictions
+coordinates(krige_data) <- c("lon", "lat")
+grid <- as(basic_grid, 'SpatialGridDataFrame')
+crs(krige_data) = crs(grid)
+```
+
+
+```{r}
+idw <- gstat::idw(formula=resid~1, locations=krige_data, newdata=grid, idp=2)
+summary(idw)
+
+plot(idw)
+```
+
+
+```{r}
+july1st_idw <- raster(idw)
+july_1st_with_idw <- july_granular + july1st_idw
+#plot(july_granular)
+#plot(july_1st_with_idw) 
+ tm_shape(july_granular) + tm_raster() + tm_shape(july1st_geo) + tm_dots(col='avg_pm25')
+ tm_shape(july_1st_with_idw) + tm_raster(alpha=0.5) + tm_shape(july1st_geo) + tm_dots(col='avg_pm25')
+```
+

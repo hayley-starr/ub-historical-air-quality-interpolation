@@ -1,0 +1,110 @@
+---
+title: "Computing Basic Rasters Using Data Fusion for Each Frame"
+author: "Hayley Garment"
+date: "7/14/2020"
+output: html_document
+---
+
+In this file:
+1. For each frame data generate residuals from monthly LUR
+2. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(broom)
+library(rgdal)
+library(sp)
+library(raster)
+library(geostatsp)
+library(gstat)
+library(stars)
+```
+
+**1. For each frame data generate residuals from monthly LUR**
+*Load in the weekly avg dataframe*
+```{r}
+mov_weekly_avgs <- readRDS('data/moving_daily_avg_every_4th_day.rds')
+mov_weekly_avgs <- mov_weekly_avgs %>% 
+  dplyr::select(date, station_serial, mov_avg_pm25) %>% 
+  mutate(year = year(date), month = month(date))
+```
+
+*Load in monthly predictions*
+```{r}
+lur_predictions <- readRDS('data/all_monthly_predictions.rds')
+lur_predictions <- lur_predictions %>%
+  mutate(year = year(date), month = month(date)) %>% 
+  dplyr::select(-date) %>% 
+  rename(lur_predicted = predicted)
+```
+
+*Add in lur prediction to the mov_avg to get the residuals*
+```{r}
+mov_avg_with_residuals <- mov_weekly_avgs %>% left_join(lur_predictions) %>% 
+  mutate(residual = mov_avg_pm25 - lur_predicted)
+```
+
+**2.**
+*make data spatial so can do idw*
+```{r}
+station_serials <- readRDS('data/stations_serial_num.rds')
+station_serials <- station_serials %>% rename(station_serial = serial_number)
+
+residuals_lonlat <- left_join(mov_avg_with_residuals, station_serials, by="station_serial") %>% dplyr::select(-Coordinate)
+```
+
+*get raster layer output data*
+```{r}
+# using one of my tifs as example
+sampleLUR <- raster('lurs/2019_02_LUR1.tif')
+
+extent <- extent(sampleLUR)
+
+# Initialize the new raster layer
+output_grid <- raster(extent)
+
+# Set the resolution to be that of example
+res(output_grid) <- res(sampleLUR)
+output_grid[] <- 0
+extent(output_grid) <- extent
+```
+
+*IDW*
+```{r}
+idw_sample_data <- residuals_lonlat %>% filter(date == '2019-02-18')
+coordinates(idw_sample_data) <- c("lon", "lat")
+
+grid <- as(output_grid, 'SpatialGridDataFrame')
+crs(idw_sample_data) = crs(grid)
+
+idw <- gstat::idw(formula=residual~1, locations=idw_sample_data, newdata=grid, idp=2)
+summary(idw)
+
+
+
+raster_idw <- raster(idw)
+raster_grid <- raster(grid)
+
+sample_with_idw <- sampleLUR + raster_idw
+```
+
+*View Sample*
+```{r}
+color_breaks <- c(0, 25, 50, 100, 150, 200, 250, 300)
+tmap_mode("view")
+tm_shape(sample_with_idw) + tm_raster(alpha=0.5, palette = "RdPu", n = 9, breaks = color_breaks)
+tm_shape(raster_idw) + tm_raster(alpha=0.5, palette = "RdPu", n = 9, breaks = color_breaks)
+```
+
+*write raster to a geotiff*
+```{r}
+writeRaster(sample_with_idw, "sample_frame_raster.tif", format = "GTiff")
+```
+

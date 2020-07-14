@@ -1,0 +1,166 @@
+---
+title: "Computing Final Summer LURs"
+author: "Hayley Garment"
+date: "7/13/2020"
+output: html_document
+---
+
+In this file:
+1. Computing LUR for each Summer Month
+
+Output:
+
+File 'data/all_monthly_predictions.rds' with summer month predictions and previous winter predictions
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(broom)
+library(rgdal)
+library(sp)
+library(raster)
+```
+
+*Load predictor variables at each station and station locations*
+```{r}
+predictor_vals <- read.csv('data/sensor_locations_predictor_values_additional_vars.csv') %>% 
+  rename(station_serial = serial_num) %>% dplyr::select(-FID, -lat, -lon) %>% filter(station_serial != 'SLSVLW4')
+
+predictor_vals <- predictor_vals %>% mutate(high_growth = if_else(pop_change > 1, TRUE, FALSE))
+
+stations <- read_rds('data/stations_serial_num.rds') %>% rename(station_serial = serial_number)
+```
+
+
+**1. Computing LUR for each Summer Month**
+
+FUNCTION TO GET DEPENDENT AND INDEPENDENT VARS
+```{r}
+color_breaks <- c(0, 5, 10, 15, 25, 45, 85, 100)
+
+get_monthly_dataframe <- function(filename) {
+  monthly_avg <- readRDS(filename) %>% dplyr::select(-datetime) %>% filter(station_serial != 'SLSVLW4')
+  
+  # join with predictor vals and create calculated terms
+  month_data <- left_join(monthly_avg, predictor_vals)
+  month_data <- month_data %>% mutate(lnPM25 = log(monthly_avg_pm25))
+  
+  month_data
+}
+
+view_map <- function(filename) {
+  monthly_avg <- readRDS(filename) %>% dplyr::select(-datetime) %>% filter(station_serial != 'SLSVLW4')
+  tmap_mode("view")
+  monthly_geo <- st_as_sf(monthly_avg, coords = c("lon", "lat"), crs = 4326) 
+  tm_shape(monthly_geo) + tm_dots(col='monthly_avg_pm25', palette = "RdPu", n = 9, breaks = color_breaks)
+}
+
+show_predictor_table <- function(monthly_dataframe) {
+  predictors <- monthly_dataframe %>% 
+    dplyr::select(-lon, -lat, -station_serial, -monthly_avg_pm25 , -district) %>%
+    colnames()
+  
+  rsq_no_inractn <- list()
+  rsq_with_inractn <- list()
+  
+  for(i in 1:length(predictors)) {
+    predictor <- predictors[i]
+    model <- lm(monthly_avg_pm25 ~ get(predictor), monthly_dataframe)
+    r_squared <- summary(model)$adj.r.squared
+    rsq_no_inractn[[i]] <- r_squared
+    
+    model <- lm(monthly_avg_pm25 ~ get(predictor):high_growth, monthly_dataframe)
+    r_squared <- summary(model)$adj.r.squared
+    rsq_with_inractn[[i]] <- r_squared
+  }
+  
+  cbind(predictors, rsq_no_inractn, rsq_with_inractn)
+}
+
+#Given OLS, make predictions at each station
+ln_get_predictions_at_all_stations <- function(ln_ols) {
+  month_data_with_predictions <- augment(ln_ols, newdata = predictor_vals)
+  month_data_with_predictions <- month_data_with_predictions %>% mutate(predicted = exp(.fitted))
+  month_data_with_predictions
+}
+
+get_predictions_at_all_stations <- function(ols) {
+  month_data_with_predictions <- augment(ols, newdata = predictor_vals)
+  month_data_with_predictions <- month_data_with_predictions %>% mutate(predicted = .fitted)
+  month_data_with_predictions
+}
+
+#Show Predcitions on Map
+show_prediction_map <- function(predictions) {
+  predictions_with_lonlat <- left_join(predictions, stations)
+  predictions_geo <- st_as_sf(predictions_with_lonlat, coords = c("lon", "lat"), crs = 4326)
+  predictions_geo %>% tm_shape() + tm_dots(col='predicted', palette = "RdPu", n = 9, breaks = color_breaks)
+}
+
+```
+
+
+Step 1: Look at Predictors
+```{r}
+month_in_question <- '2019-02-01'
+month_data_file <- paste0('data/monthly_avgs/month_of_', month_in_question, '.rds', sep='')
+dataframe <- get_monthly_dataframe(month_data_file)
+show_predictor_table(dataframe)
+```
+
+Step 1: Try out a LUR
+```{r}
+ln_ols <- lm(lnPM25 ~ res_road_005, dataframe)
+tidy(ln_ols)
+summary(ln_ols)$adj.r.squared
+```
+
+```{r}
+ols <- lm(monthly_avg_pm25 ~ res_road_005 + ub_pop_2019_1km:high_growth, dataframe)
+tidy(ols)
+summary(ols)$adj.r.squared
+```
+
+Step 3: Verify it looks OK on the map
+```{r}
+predictions_at_stations <- ln_get_predictions_at_all_stations(ln_ols)
+#OR
+#predictions_at_stations <- get_predictions_at_all_stations(ols)
+view_map(month_data_file)
+show_prediction_map(predictions_at_stations)
+```
+
+Step 4: Save the info!
+RECORD TO AIRTABLE
+```{r}
+selected_ols <- ln_ols
+#OR
+#selected_ols <- ols
+
+paste(month_in_question)
+selected_ols$coefficients
+summary(selected_ols)$adj.r.squared
+```
+
+SAVE PREDICTIONS - RUN ONLY ONCE!
+```{r}
+current_month_predictions <- predictions_at_stations %>% select(station_serial, predicted) %>% mutate(date=date(month_in_question))
+#add predictions to existing table
+
+saveRDS(current_month_predictions, paste0('data/monthly_predictions/month_of_', month_in_question, '.rds', sep=''))
+
+#first time only
+#all_predictions <- current_month_predictions
+
+#except for first set of predictions
+all_predictions <- readRDS('data/all_monthly_predictions.rds')
+all_predictions <- rbind(all_predictions, current_month_predictions)
+
+saveRDS(all_predictions, 'data/all_monthly_predictions.rds')
+```

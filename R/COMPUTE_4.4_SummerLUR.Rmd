@@ -37,7 +37,7 @@ predictor_vals <- read.csv('data/sensor_locations_predictor_values_additional_va
 *Load independent variable at each station -pm2.5 avg
 **Sample**
 ```{r}
-monthly_avg <- readRDS('data/monthly_avgs/month_of_2019-06-01.rds') %>% dplyr::select(-datetime) %>% filter(station_serial != 'SLSVLW4')
+monthly_avg <- readRDS('data/monthly_avgs/month_of_2019-07-01.rds') %>% dplyr::select(-datetime) %>% filter(station_serial != 'SLSVLW4')
 ```
 
 *look on map*
@@ -51,13 +51,12 @@ tm_shape(monthly_geo) + tm_dots(col='monthly_avg_pm25')
 **1. Join predictor and indpendent variables at each station**
 ```{r}
 month_data <- left_join(monthly_avg, predictor_vals)
-
-#month_data
+month_data <- month_data %>% mutate(high_growth = if_else(pop_change > 1, TRUE, FALSE))
 ```
 
 **Looking at plots for avg pm25 vs predictors**
 ```{r}
-if (false) {
+if (FALSE) {
 ggplot(month_data, aes(x=dist_to_trunk_rd, y=monthly_avg_pm25)) + geom_point()
 ggplot(month_data, aes(x=ub_pop_2019_1km, y=monthly_avg_pm25)) + geom_point()
 ggplot(month_data, aes(x=ub_topogra, y=monthly_avg_pm25)) + geom_point()
@@ -72,50 +71,47 @@ ggplot(month_data, aes(x=stove_conc_005, y=monthly_avg_pm25)) +
 
 **2. Regression**
 
-
 ```{r}
 predictors <- month_data %>% dplyr::select(-lon, -lat, -station_serial, -monthly_avg_pm25 , -district) %>% colnames()
 ```
 
 
 ```{r}
-predictor_rsquared <- list()
+predictor_rsquared_no_interaction <- list()
 
 for(i in 1:length(predictors)) {
   predictor <- predictors[i]
   model <- lm(monthly_avg_pm25 ~ get(predictor), month_data)
   r_squared <- summary(model)$adj.r.squared
   
-  predictor_rsquared[[i]] <- r_squared
+  predictor_rsquared_no_interaction[[i]] <- r_squared
 }
 
-cbind(predictors, predictor_rsquared)
+cbind(predictors, predictor_rsquared_no_interaction)
 
 ```
 
 
-*Adding potential interaction term for pop change*
-```{r}
-month_data <- month_data %>% mutate(high_growth = if_else(pop_change > 1, TRUE, FALSE))
-```
 
+INTERACTION with HIGH GROWTH
 ```{r}
-predictor_rsquared <- list()
+predictor_rsquared_with_interaction <- list()
 
 for(i in 1:length(predictors)) {
   predictor <- predictors[i]
   model <- lm(monthly_avg_pm25 ~ get(predictor):high_growth, month_data)
   r_squared <- summary(model)$adj.r.squared
   
-  predictor_rsquared[[i]] <- r_squared
+  predictor_rsquared_with_interaction[[i]] <- r_squared
 }
 
-cbind(predictors, predictor_rsquared)
+cbind(predictors, predictor_rsquared_with_interaction)
 
 ```
 
 *trying to add the district as a categorical variable*
 ```{r}
+if(FALSE) {
 month_data
 
 ub_districts <-read_csv('data/ub_districts.csv') %>% 
@@ -123,21 +119,22 @@ ub_districts <-read_csv('data/ub_districts.csv') %>%
   dplyr::select(district, Name)
 
 month_data <- left_join(month_data, ub_districts) %>% rename(district_name = Name)
+}
 ```
-
 
 COMBINED MODEL FOR MONTHLY AVG
 *Testing out variables together*
 *Ok with stove_conc005:high growth + PathDis_ci + population!*
-*0.41 for September*
+*0.41 for September: stove_conc005:high growth + PathDis_ci + population*
 *0.28 for july, with path + highgrowth:stove density_007*
-*june: stove_conc_005 + high_growth:ub_pop_2019_1km: 0.25*
+*0.25 for june: stove_conc_005 + high_growth:ub_pop_2019_1km*
 ```{r}
-ols <- lm(monthly_avg_pm25 ~ stove_conc_005 + high_growth:ub_pop_2019_1km, month_data)
-
-ols %>% summary()
+ols <- lm(monthly_avg_pm25 ~ PathDis_ci + high_growth:stove_kernel_density_radius_01, month_data)
 
 tidy(ols)
+
+summary <- summary(ols)
+summary$adj.r.squared
 ```
 
 

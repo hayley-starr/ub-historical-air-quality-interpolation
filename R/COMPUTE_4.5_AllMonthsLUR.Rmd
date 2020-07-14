@@ -35,7 +35,6 @@ predictor_vals <- read.csv('data/sensor_locations_predictor_values_additional_va
 
 
 *Load independent variable at each station -pm2.5 avg
-**Sample**
 ```{r}
 monthly_avg <- readRDS('data/sensor_means_by_month_over_650_readings.rds') %>% dplyr::select(-datetime, -num_readings) %>% filter(station_serial != 'SLSVLW4')
 ```
@@ -43,7 +42,6 @@ monthly_avg <- readRDS('data/sensor_means_by_month_over_650_readings.rds') %>% d
 *load temperatures for each year and month*
 ```{r}
 monthly_temps <- read_csv('raw_data/ub_monthly_avg_temp.csv')
-
 monthly_avg_and_temps <- left_join(monthly_avg, monthly_temps, by=c('year', 'month'))
 ```
 
@@ -51,64 +49,54 @@ monthly_avg_and_temps <- left_join(monthly_avg, monthly_temps, by=c('year', 'mon
 **1. Join predictor and indpendent variables at each station**
 ```{r}
 month_data <- left_join(monthly_avg_and_temps, predictor_vals)
+month_data <- month_data %>% mutate(is_winter = avg_temp_c <= 0) %>% mutate(high_growth = if_else(pop_change > 1, TRUE, FALSE))
 
 #month_data
 ```
 
 **2. Regression**
 
-
 ```{r}
-month_data %>% colnames()
-
 predictors <- month_data %>% dplyr::select(-month, -year, -station_serial, -monthly_avg_pm25 , -district) %>% colnames()
+
+
+month_data <- month_data %>% mutate(lnPM25 = log(monthly_avg_pm25))
 ```
 
 Look at the individual r squared values for each predictor - bad of course
 ```{r}
-predictor_rsquared <- list()
+rsq <- list()
+rsq_wint <- list()
+rsq <- list()
 
 for(i in 1:length(predictors)) {
   predictor <- predictors[i]
   model <- lm(monthly_avg_pm25 ~ get(predictor), month_data)
   r_squared <- summary(model)$adj.r.squared
+  rsq[[i]] <- r_squared
   
-  predictor_rsquared[[i]] <- r_squared
-}
-
-cbind(predictors, predictor_rsquared)
-
-```
-
-Look at possible interaction terms, temp and population change
-```{r}
-month_data <- month_data %>% mutate(is_winter = avg_temp_c <= 0) %>% mutate(high_growth = if_else(pop_change > 1, TRUE, FALSE))
-```
-
-*checking interaction with winter*
-```{r}
-predictor_rsquared <- list()
-
-for(i in 1:length(predictors)) {
-  predictor <- predictors[i]
+  # winter interaction
   model <- lm(monthly_avg_pm25 ~ get(predictor):is_winter, month_data)
   r_squared <- summary(model)$adj.r.squared
-  
-  predictor_rsquared[[i]] <- r_squared
+  rsq_wint[[i]] <- r_squared
 }
 
-cbind(predictors, predictor_rsquared)
+cbind(predictors, rsq, rsq_wint)
+
 ```
+
 
 COMBINED MODEL FOR MONTHLY AVG
 *Testing out variables together*
 *0.49: monthly_avg_pm25 ~ PathDis_ci:is_winter + stove_kernel_density_radius_01:is_winter:high_growth +  ub_pop_2019_1km + res_road_01:is_winter:high_growth*
 
-*0.50: monthly_avg_pm25 ~ PathDis_ci:is_winter + stove_kernel_density_radius_01:is_winter:high_growth +  ub_pop_2019_1km + res_road_01:is_winter:high_growth + ub_topogra:is_winter*
+*0.50 (0.62 with ln): monthly_avg_pm25 ~ PathDis_ci:is_winter + stove_kernel_density_radius_01:is_winter:high_growth +  ub_pop_2019_1km + res_road_01:is_winter:high_growth + ub_topogra:is_winter*
+
+*0.75 if include temp and ln: monthly_avg_pm25 ~ avg_temp_c + PathDis_ci:is_winter + stove_kernel_density_radius_01:is_winter:high_growth +  ub_pop_2019_1km + res_road_01:is_winter:high_growth + ub_topogra:is_winter*
 
 
 ```{r}
-ols <- lm(monthly_avg_pm25 ~ PathDis_ci:is_winter + stove_kernel_density_radius_007:is_winter:high_growth +  ub_pop_2019_1km + res_road_01:is_winter:high_growth + ub_topogra:is_winter, month_data)
+ols <- lm(lnPM25 ~ avg_temp_c + PathDis_ci:is_winter + stove_kernel_density_radius_007:is_winter:high_growth +  ub_pop_2019_1km + res_road_01:is_winter:high_growth + ub_topogra:is_winter, month_data)
 
 ols %>% summary()
 
@@ -122,23 +110,51 @@ winter_data <- month_data %>% filter(is_winter)
 nonwinter_data <-  month_data %>% filter(!is_winter)
 ```
 
+Look at general formula just for winter months, not so great :/ 0.46
+```{r}
+ols <- lm(lnPM25 ~ avg_temp_c + PathDis_ci + stove_kernel_density_radius_007:high_growth +  ub_pop_2019_1km + res_road_01:high_growth + ub_topogra, winter_data)
+
+tidy(ols)
+summary(ols)$adj.r.square
+```
+
+
+
 
 ```{r}
-winter_r <- list()
-nonwinter_r <- list()
-for(i in 1:length(predictors)) {
-  predictor <- predictors[i]
-  winter_model <- lm(monthly_avg_pm25 ~ get(predictor), winter_data)
-  winter_r_squared <- summary(winter_model)$adj.r.squared
-  
-  nonwinter_model <- lm(monthly_avg_pm25 ~ get(predictor), nonwinter_data)
-  nonwinter_r_squared <- summary(nonwinter_model)$adj.r.squared
-  
-  winter_r[[i]] <- winter_r_squared
-  nonwinter_r[[i]] <- nonwinter_r_squared
-}
 
-cbind(predictors, winter_r, nonwinter_r)
+single_month <- month_data %>% filter(is_winter & ((year == 2020) | (year == 2019 & month > 5)))
+single_month %>% distinct(month, year)
+  
+  rsq <- list()
+  rsq_hg <- list()
+  rsq_ln <- list()
+  rsq_ln_hg <- list()
+
+  for(j in 1:length(predictors)) {
+    predictor <- predictors[j]
+    
+    model <- lm(monthly_avg_pm25 ~ get(predictor), single_month)
+    r_squared <- summary(model)$adj.r.squared
+    rsq[[j]] <- r_squared
+    
+    #with ln
+    model <- lm(lnPM25 ~ get(predictor), single_month)
+    r_squared <- summary(model)$adj.r.squared
+    rsq_ln[[j]] <- r_squared
+    
+    # with high growth
+    model <- lm(monthly_avg_pm25 ~ get(predictor):high_growth, single_month)
+    r_squared <- summary(model)$adj.r.squared
+    rsq_hg[[j]] <- r_squared
+    
+    #with ln and high_growth
+    model <- lm(lnPM25 ~ get(predictor):high_growth, single_month)
+    r_squared <- summary(model)$adj.r.squared
+    rsq_ln_hg[[j]] <- r_squared
+  }
+
+  cbind(predictors, rsq, rsq_hg, rsq_ln, rsq_ln_hg)
 ```
 
 
@@ -175,17 +191,35 @@ monthly_statistics <- list()
 for(i in 1:12) {
   single_month <- month_data %>% filter(month == i)
   
-  predictor_rsquared <- list()
+  rsq <- list()
+  rsq_hg <- list()
+  rsq_ln <- list()
+  rsq_ln_hg <- list()
 
   for(j in 1:length(predictors)) {
     predictor <- predictors[j]
-    model <- lm(monthly_avg_pm25 ~ get(predictor) + get(predictor):high_growth, single_month)
-    r_squared <- summary(model)$adj.r.squared
     
-    predictor_rsquared[[j]] <- r_squared
+    model <- lm(monthly_avg_pm25 ~ get(predictor), single_month)
+    r_squared <- summary(model)$adj.r.squared
+    rsq[[j]] <- r_squared
+    
+    #with ln
+    model <- lm(lnPM25 ~ get(predictor), single_month)
+    r_squared <- summary(model)$adj.r.squared
+    rsq_ln[[j]] <- r_squared
+    
+    # with high growth
+    model <- lm(monthly_avg_pm25 ~ get(predictor):high_growth, single_month)
+    r_squared <- summary(model)$adj.r.squared
+    rsq_hg[[j]] <- r_squared
+    
+    #with ln and high_growth
+    model <- lm(lnPM25 ~ get(predictor):high_growth, single_month)
+    r_squared <- summary(model)$adj.r.squared
+    rsq_ln_hg[[j]] <- r_squared
   }
 
-  monthly_statistics[[i]] <- cbind(predictors, predictor_rsquared)
+  monthly_statistics[[i]] <- cbind(predictors, rsq, rsq_hg, rsq_ln, rsq_ln_hg)
 }
 
 monthly_statistics
@@ -205,13 +239,5 @@ month_data_with_predictions %>%
   ggtitle('Jan 2020')
 
 summary(ols)
-```
-
-
-```{r}
-month_data_with_predictions_geo <- st_as_sf(month_data_with_predictions, coords = c("lon", "lat"), crs = 4326) 
-tm_shape(month_data_with_predictions_geo) + tm_dots(col='monthly_avg_pm25')
-tm_shape(month_data_with_predictions_geo) + tm_dots(col='.fitted')
-tm_shape(month_data_with_predictions_geo) + tm_dots(col='.resid')
 ```
 

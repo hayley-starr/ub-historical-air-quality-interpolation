@@ -1,0 +1,224 @@
+---
+title: "Generate Frame Input Data"
+author: "Hayley Garment"
+date: "7/13/2020"
+output: html_document
+---
+
+In this file:
+1. Calculate daily average at each sensor where there is data
+2. Add in predictions to daily avg table
+3. Calculate 7 day average for each day/sensor
+4. Extract frame input data by sampling every 4 days
+
+Output:
+
+1. 'data/no_gap_daily_avgs.rds' - either observed or predicted value every day at every station between feb 14th 2019 and may 1st 20120
+
+2. 'data/moving_daily_avg_every_4th_day.rds' - 7 day average, sampled every 4th day
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(tmap)
+library(sf)
+library(mapview)
+library(broom)
+library(rgdal)
+library(sp)
+library(raster)
+library(geostatsp)
+library(gstat)
+library(pracma) # movavg
+```
+
+*Load station locations*
+```{r}
+stations <- read_rds('data/stations_serial_num.rds') %>% rename(station_serial = serial_number)
+#stations_sf <- st_as_sf(stations, coords = c("lon", "lat"), crs = 4326) 
+#tm_shape(stations_sf) + tm_dots()
+```
+
+*Load sensor data*
+```{r}
+sensor_data <- readRDS('data/sensor_data_tidy.rds') %>% filter(station_serial != 'SLSVLW4')
+```
+
+*Load prediction data*
+```{r}
+predictions <- readRDS('data/all_monthly_predictions.rds')
+```
+
+**1. Calculate daily average at each sensor**
+*Get daily average per sensor, so long as sensor has 24 readings. Only between Feb 15th 2019 and April 30th 2020*
+```{r}
+daily_avgs <- sensor_data %>% 
+  mutate(date = date(datetime)) %>% 
+  group_by(station_serial, date) %>% 
+  summarise(avg_pm25 = mean(pm25_ug), num_readings = n()) %>% 
+  ungroup()
+
+#check
+#daily_avgs %>% count() #8632
+#daily_avgs %>% filter(num_readings >= 23) %>% count() #6832
+
+daily_avgs <- daily_avgs %>% filter(num_readings >= 23)
+daily_avgs <- daily_avgs %>% filter(date >= '2019-02-14' & date < '2020-05-01') %>% arrange(date)
+```
+
+LIST STATION SERIALS
+```{r}
+daily_avgs %>% distinct(station_serial)
+```
+
+*plot without avg*
+```{r}
+daily_avgs %>% ggplot(aes(x=date, y=avg_pm25, col=station_serial)) + geom_line()
+```
+
+
+*Explore where the gaps are for each sensor*
+```{r}
+station = 'RR9M4V9'
+
+daily_avgs %>% filter(station_serial == station) %>% 
+  ggplot(aes(x=date, y = avg_pm25)) + geom_point()
+
+predictions %>% filter(station_serial == station) %>% ggplot(aes(x=date, y=predicted)) + geom_line()
+```
+
+**2. Fill in gaps with predictions**
+```{r}
+# add in prediction for every day using LUR prediction data
+predictions <- predictions %>% 
+  mutate(year = year(date), month = month(date))
+```
+
+**smooth predictions a bit**
+
+*Get Dates Table*
+```{r}
+dates <- daily_avgs %>% distinct(date) %>% arrange(date) # 442 days
+dates <- dates %>% mutate(year = year(date), month = month(date))
+
+days_per_month <- dates %>% group_by(year, month) %>% 
+  summarize(n_days = n()) %>% 
+  ungroup()
+```
+
+*Calculate duration and change in avg per month, then smooth predictions*
+```{r}
+# get lead and lag to calculate slope
+lead_lag_predictions <- predictions %>% 
+  arrange(date) %>% 
+  group_by(station_serial) %>% 
+  mutate(prev_month = lag(predicted, order_by=date),
+         next_month = lead(predicted, order_by=date)) %>% 
+  ungroup() %>% 
+  mutate(prev_month = if_else(is.na(prev_month), predicted, prev_month), 
+         next_month = if_else(is.na(next_month), predicted, next_month)) 
+
+# take avg between two months as endpoints
+lead_lag_predictions <- lead_lag_predictions %>% 
+  mutate(prev_val = (predicted + prev_month)/2,
+         next_val = (predicted + next_month)/2) 
+
+lead_lag_predictions <- lead_lag_predictions %>% left_join(days_per_month)
+lead_lag_predictions <- lead_lag_predictions %>% dplyr::select(-date)
+
+dates_with_lead_lag_predictions <- left_join(dates, lead_lag_predictions)
+
+dates_with_lead_lag_predictions <- dates_with_lead_lag_predictions %>% 
+  mutate(day = if_else(year == 2019 & month == 2, day(date) - 14, day(date) - 1))
+  
+dates_with_smooth_predictions <- dates_with_lead_lag_predictions %>% mutate(predicted_smooth = prev_val + (day * (next_val - prev_val) / n_days ))
+
+
+dates_with_smooth_predictions <- dates_with_smooth_predictions %>% dplyr::select(date, station_serial, predicted, predicted_smooth)
+```
+
+
+```{r}
+station = 'KT4KJ47'
+
+dates_with_smooth_predictions %>% filter(station_serial == station) %>% 
+  ggplot(aes(x=date, y = predicted_smooth)) + geom_point()
+```
+
+
+
+```{r}
+# join with daily_avgs and see where there are gaps :P
+actual_predicted_by_date <- left_join(dates_with_smooth_predictions, daily_avgs)
+
+no_gap_daily_avg <- actual_predicted_by_date %>% mutate(avg_pm25_fill = if_else(is.na(avg_pm25), predicted_smooth, avg_pm25))
+
+#saveRDS(no_gap_daily_avg, 'data/no_gap_daily_avgs.rds')
+```
+
+
+
+
+**3. Calculate 7 day average for each day/sensor**
+```{r}
+no_gap_daily_mov_avg <- no_gap_daily_avg %>% 
+  group_by(station_serial) %>% 
+  arrange(date) %>% 
+  mutate(mov_avg_pm25 = movavg(avg_pm25_fill, 7, "s")) %>% 
+  ungroup()
+
+every_4th_day <- no_gap_daily_mov_avg %>% group_by(station_serial) %>% 
+  filter(row_number() %% 4 == 1) %>% 
+  ungroup()
+
+#saveRDS(every_4th_day, 'data/moving_daily_avg_every_4th_day.rds')
+
+every_4th_day %>% filter(station_serial == 'GCWJPX9')
+```
+
+Investigate :) Looks nice!
+```{r}
+station = 'GCWJPX9'
+daily_avgs %>% distinct(station_serial)
+
+daily_avgs %>% filter(station_serial == station) %>% 
+  ggplot(aes(x=date, y = avg_pm25)) + geom_point()
+
+no_gap_daily_avg %>% filter(station_serial == station) %>% 
+  ggplot(aes(x=date, y = avg_pm25_fill)) + geom_point()
+
+no_gap_daily_mov_avg %>% filter(station_serial == station) %>% 
+  ggplot(aes(x=date, y = mov_avg_pm25)) + geom_point()
+```
+
+
+
+EXTRA WORK TO GET END OF FEB AVGS
+*Figuring out the averages for just the last weeks of February - starting 14th feb*
+```{r}
+#february_daily <- sensor_data %>% 
+  mutate(month = month(datetime), year = year(datetime), week = floor(day(datetime)/7)) %>%
+  filter(month == 2 & year == 2019) %>% 
+  group_by(station_serial, week) %>% 
+  summarise(avg_pm25 = mean(pm25_ug), num_readings = n()) %>% 
+  ungroup()
+
+#february_daily %>% filter(num_readings > 130) %>% group_by(week) %>% 
+  summarize(num_stations = n()) %>% ungroup()
+
+end_of_feb_avgs <- sensor_data %>% 
+  mutate(month = month(datetime), year = year(datetime), week = floor(day(datetime)/7)) %>%
+  filter(month == 2 & year == 2019 & week > 1) %>% 
+  group_by(station_serial) %>% 
+  summarise(avg_pm25 = mean(pm25_ug), num_readings = n()) %>% 
+  ungroup()
+
+end_of_feb_avgs <- end_of_feb_avgs %>% filter(num_readings > 350) %>% mutate(datetime = 5) %>% rename(monthly_avg_pm25 = avg_pm25) %>% left_join(stations)
+
+saveRDS(end_of_feb_avgs, 'data/monthly_avgs/month_of_end_feb_2019.rds')
+
+```
+
