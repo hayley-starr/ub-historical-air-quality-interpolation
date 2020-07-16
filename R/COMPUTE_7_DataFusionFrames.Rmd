@@ -63,48 +63,122 @@ residuals_lonlat <- left_join(mov_avg_with_residuals, station_serials, by="stati
 *get raster layer output data*
 ```{r}
 # using one of my tifs as example
-sampleLUR <- raster('lurs/2019_02_LUR1.tif')
+sampleLUR <- raster('lurs/2020_02_LUR1.tif')
+sampleLUR2 <- raster('lurs/2019_02_LUR1.tif')
 
 extent <- extent(sampleLUR)
+extent(sampleLUR2)
 
-# Initialize the new raster layer
-output_grid <- raster(extent)
 
-# Set the resolution to be that of example
-res(output_grid) <- res(sampleLUR)
-output_grid[] <- 0
-extent(output_grid) <- extent
+
+extent(croppedLURExtent)
+
+origin(sampleLUR)
+
 ```
 
 *IDW*
 ```{r}
-idw_sample_data <- residuals_lonlat %>% filter(date == '2019-02-18')
-coordinates(idw_sample_data) <- c("lon", "lat")
+band_breaks <- c(-Inf, 15, 1,
+                 15, 25, 2,
+                 25, 50, 3,
+                 50, 75, 4,
+                 75, 100, 5,
+                 100, 125, 6,
+                 125, 150, 7,
+                 150, 175, 8,
+                 175, 200, 9,
+                 200, 225, 10,
+                 225, 250, 11,
+                 250, 300, 12,
+                 300, 350, 13,
+                 350, Inf, 14)
 
-grid <- as(output_grid, 'SpatialGridDataFrame')
-crs(idw_sample_data) = crs(grid)
+# how to reclassify the raster
+rclassify_mat <- matrix(band_breaks, ncol=3, byrow=TRUE)
 
-idw <- gstat::idw(formula=residual~1, locations=idw_sample_data, newdata=grid, idp=2)
-summary(idw)
+# smaller LUR extent
+sampleLUR <- raster('lurs/2020_02_LUR1.tif')
+extent <- extent(sampleLUR)
 
+generateRasterFrame <- function(frame_date, month_lur) {
+  #0 Get output grid based on lur, fix month_lur extent
+  
+  cropped_month_lur <- crop(month_lur, extent)
+  month_lur <- resample(cropped_month_lur, sampleLUR)
+  
+  # Initialize the new raster layer
+  output_grid <- raster(extent)
+  
+  # Set the resolution to be that of example
+  res(output_grid) <- res(month_lur)
+  output_grid[] <- 0
+  extent(output_grid) <- extent
+  extent(month_lur) <- extent
+  output_grid <- as(output_grid, 'SpatialGridDataFrame')
+  
+  
+  # 1. grab data + add coors and crs
+  frame_data <- residuals_lonlat %>% filter(date == date(frame_date))
+  coordinates(frame_data) <- c("lon", "lat")
+  crs(frame_data) = crs(output_grid)
+  
+  #2. calculate the idw raster and add it to the LUR
+  frame_idw <- gstat::idw(formula=residual~1, locations=frame_data, newdata=output_grid, idp=2)
+  raster_idw <- raster(frame_idw)
+  raster_frame <- month_lur + raster_idw
+  
+  grid_finer <- raster::disaggregate(raster_frame, fact = 10)
+  #3. resample to be finer
+  resample_finer <- resample(raster_frame, grid_finer, method="bilinear")
+  
+  # reclassify to integer bands
+  final_banded_raster <- reclassify(resample_finer, rclassify_mat, include.lowest=TRUE)
+  final_banded_raster
+}
 
-
-raster_idw <- raster(idw)
-raster_grid <- raster(grid)
-
-sample_with_idw <- sampleLUR + raster_idw
 ```
 
-*View Sample*
+*Loop through dates and generate rasters*
+```{r}
+frame_dates <- residuals_lonlat %>% 
+  distinct(date) %>% 
+  mutate(year_and_month = str_replace_all(str_sub(date, 1, 8), '-', '_'))
+
+for(i in 1:30) { #nrow(frame_dates)
+  frame_date <- frame_dates$date[i]
+  
+  # get the appropriate LUR for that month
+  frame_year_and_month <- frame_dates$year_and_month[i]
+  lur_filename <- paste0('lurs/', frame_year_and_month, 'LUR1.tif', sep='')
+  LUR <- raster(lur_filename)
+  
+  raster_frame <- generateRasterFrame(frame_date, LUR)
+  filename <- paste0('frames/air_quality_bands_', frame_date, '.tif', sep='')
+  #tm_shape(raster_frame) + tm_raster(alpha=0.5, palette = "RdPu", n = 9)
+
+  writeRaster(raster_frame, filename, format = "GTiff")
+}
+```
+
+
+
+*View*
 ```{r}
 color_breaks <- c(0, 25, 50, 100, 150, 200, 250, 300)
 tmap_mode("view")
 tm_shape(sample_with_idw) + tm_raster(alpha=0.5, palette = "RdPu", n = 9, breaks = color_breaks)
 tm_shape(raster_idw) + tm_raster(alpha=0.5, palette = "RdPu", n = 9, breaks = color_breaks)
+
 ```
 
-*write raster to a geotiff*
+*TEST RESAMPLE*
 ```{r}
-writeRaster(sample_with_idw, "sample_frame_raster.tif", format = "GTiff")
-```
+res(sample_with_idw)
+sample_finer <- raster::disaggregate(sample_with_idw, fact = 10)
+res(sample_finer)
 
+resample_finer <- resample(sample_with_idw, sample_finer, method="bilinear")
+
+writeRaster(sample_with_idw_cut_bands, "sample_frame_raster_bands.tif", format = "GTiff")
+```
